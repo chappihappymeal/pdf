@@ -17,9 +17,14 @@ This is a maintained continuation of [ledongthuc/pdf](https://github.com/ledongt
 
 | Version | Fix |
 |---------|-----|
+| v0.2.0 | `readArray` looped forever appending `io.EOF` on truncated PDFs — unbounded allocation until OOM (absorbed [upstream PR #79](https://github.com/ledongthuc/pdf/pull/79) by @spencerkimball) |
+| v0.2.0 | `readObject` panicked on a stray `]`, e.g. a dictionary with a missing value (absorbed the unique part of [upstream PR #64](https://github.com/ledongthuc/pdf/pull/64) by @yama6a) |
+| v0.2.0 | A PDF object split across the streams of a `/Contents` array hung text extraction (absorbed [upstream PR #76](https://github.com/ledongthuc/pdf/pull/76) by @rztaylor), and the concatenated streams are now separated with whitespace — raw concatenation glued adjacent tokens together, corrupting coordinates or panicking `Page.Content()` with `bad Td` |
+| v0.2.0 | A page whose `/Contents` has no stream data panicked out of `Page.Content()` and text extraction; it now degrades to an empty page (idea from [upstream PR #46](https://github.com/ledongthuc/pdf/pull/46) by @utsav82, reimplemented) |
+| v0.2.0 | `readDict` printed `DEBUG: ...` to the caller's stdout on dictionaries with non-name keys |
 | v0.1.0 | ASCII85 decoder: the `z` zero-group shorthand was silently stripped (4 bytes lost per group; corrupt output, `unexpected EOF` from chained FlateDecode, panic from `Page.Content()`), and the `~>` end-of-data marker never signalled EOF ([upstream issue #83](https://github.com/ledongthuc/pdf/issues/83), [PR #84](https://github.com/ledongthuc/pdf/pull/84)) |
 
-Fixes are offered back to upstream as pull requests. A triage of upstream's open bug-fix PRs (hangs, OOMs, truncated-input handling) is in progress; confirmed fixes will be absorbed here with their original authorship preserved.
+Fixes are offered back to upstream as pull requests, and upstream's open bug-fix PRs are absorbed here with their original authorship preserved. Still in the queue: [upstream PR #78](https://github.com/ledongthuc/pdf/pull/78) (hardening against malformed and hostile inputs) is under review for the next release.
 
 ## Install
 
