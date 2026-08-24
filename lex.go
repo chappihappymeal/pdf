@@ -493,12 +493,10 @@ func (b *buffer) readDict() object {
 			break
 		}
 		if tok == io.EOF {
-			tok = b.readToken()
 			break
 		}
 		n, ok := tok.(name)
 		if !ok {
-			fmt.Printf("DEBUG: %T(%v)\n. Skip dict", tok, tok)
 			b.errorf("unexpected non-name key %T(%v) parsing dictionary", tok, tok)
 			continue
 		}
