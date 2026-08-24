@@ -4,7 +4,7 @@
 
 // Package pdf implements reading of PDF files.
 //
-// Overview
+// # Overview
 //
 // PDF is Adobe's Portable Document Format, ubiquitous on the internet.
 // A PDF document is a complex data format built on a fairly simple structure.
@@ -43,7 +43,6 @@
 // they are implemented only in terms of the Value API and could be moved outside
 // the package. Equally important, traversal of other PDF data structures can be implemented
 // in other packages as needed.
-//
 package pdf
 
 // BUG(rsc): The package is incomplete, although it has been used successfully on some
@@ -68,6 +67,7 @@ import (
 	"crypto/md5"
 	"crypto/rc4"
 	"encoding/ascii85"
+	"errors"
 	"fmt"
 	"io"
 	"io/ioutil"
@@ -611,7 +611,7 @@ func (v Value) RawString() string {
 	return x
 }
 
-// Text returns v's string value interpreted as a ``text string'' (defined in the PDF spec)
+// Text returns v's string value interpreted as a “text string” (defined in the PDF spec)
 // and converted to UTF-8.
 // If v.Kind() != String, Text returns the empty string.
 func (v Value) Text() string {
@@ -798,13 +798,17 @@ func (e *errorReadCloser) Close() error {
 	return e.err
 }
 
+// errStreamNotPresent is the error a Reader for a non-stream Value responds
+// with; the lexer treats it as end of input rather than malformed data.
+var errStreamNotPresent = errors.New("stream not present")
+
 // Reader returns the data contained in the stream v.
 // If v.Kind() != Stream, Reader returns a ReadCloser that
-// responds to all reads with a ``stream not present'' error.
+// responds to all reads with a “stream not present” error.
 func (v Value) Reader() io.ReadCloser {
 	x, ok := v.data.(stream)
 	if !ok {
-		return &errorReadCloser{fmt.Errorf("stream not present")}
+		return &errorReadCloser{errStreamNotPresent}
 	}
 	var rd io.Reader
 	rd = io.NewSectionReader(v.r.f, x.offset, v.Key("Length").Int64())
