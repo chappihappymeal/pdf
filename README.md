@@ -1,23 +1,42 @@
-# PDF Reader
+# pdf
 
-[![Built with WeBuild](https://raw.githubusercontent.com/webuild-community/badge/master/svg/WeBuild.svg)](https://webuild.community)
+[![Go CI](https://github.com/chappihappymeal/pdf/actions/workflows/ci.yml/badge.svg)](https://github.com/chappihappymeal/pdf/actions/workflows/ci.yml)
+[![Go Reference](https://pkg.go.dev/badge/github.com/chappihappymeal/pdf.svg)](https://pkg.go.dev/github.com/chappihappymeal/pdf)
 
-A simple Go library which enables reading PDF files. Forked from https://github.com/rsc/pdf
+A Go library for reading PDF files and extracting their text content — plain text, styled text, or text grouped by rows and columns.
 
-Features
-  - Get plain text content (without format)
-  - Get Content (including all font and formatting information)
+This is a maintained continuation of [ledongthuc/pdf](https://github.com/ledongthuc/pdf), which itself continued the archived [rsc/pdf](https://github.com/rsc/pdf) by Russ Cox. It exists because I run this parser in production against a high volume of real-world PDFs (bank statements and receipts from dozens of different generators) and need decoder bugs fixed and merged, with regression tests, at a steady pace.
 
-## Install:
+## Why this fork
 
-`go get -u github.com/ledongthuc/pdf`
+- **Bug fixes ship.** Each fix lands with unit tests and synthetic reproduction PDFs in `testdata/` — the upstream repositories have open bug reports and pull requests waiting on review.
+- **Tagged releases.** Versioned with semver from `v0.1.0`; upstream has no tags, so all of its importers depend on pseudo-versions.
+- **Tested against a real-world corpus.** Changes are validated against a private regression corpus of bank-issued PDFs from many generators (OpenText Exstream, Ghostscript, Adobe tools and others) before release.
 
-## Examples:
+### Fixes over upstream
 
- - Check in examples/ folder
+| Version | Fix |
+|---------|-----|
+| v0.1.0 | ASCII85 decoder: the `z` zero-group shorthand was silently stripped (4 bytes lost per group; corrupt output, `unexpected EOF` from chained FlateDecode, panic from `Page.Content()`), and the `~>` end-of-data marker never signalled EOF ([upstream issue #83](https://github.com/ledongthuc/pdf/issues/83), [PR #84](https://github.com/ledongthuc/pdf/pull/84)) |
 
+Fixes are offered back to upstream as pull requests. A triage of upstream's open bug-fix PRs (hangs, OOMs, truncated-input handling) is in progress; confirmed fixes will be absorbed here with their original authorship preserved.
 
-## Read plain text
+## Install
+
+```sh
+go get github.com/chappihappymeal/pdf
+```
+
+## Features
+
+- Get plain text content (without format)
+- Get Content (including all font and formatting information)
+
+## Examples
+
+See the `examples/` folder.
+
+### Read plain text
 
 ```golang
 package main
@@ -26,7 +45,7 @@ import (
 	"bytes"
 	"fmt"
 
-	"github.com/ledongthuc/pdf"
+	"github.com/chappihappymeal/pdf"
 )
 
 func main() {
@@ -49,7 +68,7 @@ func main() {
 }
 ```
 
-## Read all text with styles from PDF
+### Read all text with styles
 
 ```golang
 package main
@@ -57,7 +76,7 @@ package main
 import (
 	"fmt"
 
-	"github.com/ledongthuc/pdf"
+	"github.com/chappihappymeal/pdf"
 )
 
 func main() {
@@ -84,8 +103,7 @@ func main() {
 }
 ```
 
-
-## Read text grouped by rows
+### Read text grouped by rows
 
 ```golang
 package main
@@ -94,7 +112,7 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/ledongthuc/pdf"
+	"github.com/chappihappymeal/pdf"
 )
 
 func main() {
@@ -103,7 +121,6 @@ func main() {
 		panic(err)
 	}
 	fmt.Println(content)
-	return
 }
 
 func readPdf(path string) (string, error) {
@@ -124,15 +141,22 @@ func readPdf(path string) (string, error) {
 
 		rows, _ := p.GetTextByRow()
 		for _, row := range rows {
-		    println(">>>> row: ", row.Position)
-		    for _, word := range row.Content {
-		        fmt.Println(word.S)
-		    }
+			println(">>>> row: ", row.Position)
+			for _, word := range row.Content {
+				fmt.Println(word.S)
+			}
 		}
 	}
 	return "", nil
 }
 ```
 
-## Demo
-![Run example](https://i.gyazo.com/01fbc539e9872593e0ff6bac7e954e6d.gif)
+## Lineage and credits
+
+- [rsc/pdf](https://github.com/rsc/pdf) — the original PDF reader by Russ Cox (archived).
+- [ledongthuc/pdf](https://github.com/ledongthuc/pdf) — Thuc Le's fork that kept the library alive and added styled-text extraction; this repository is forked from it.
+- Contributors of upstream bug-fix PRs are credited in the commits that absorb their work.
+
+## License
+
+BSD-style, see [LICENSE](LICENSE) — unchanged from the original Go Authors license.
