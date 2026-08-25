@@ -43,6 +43,7 @@ type buffer struct {
 	allowObjptr bool
 	allowStream bool
 	eof         bool
+	depth       int
 	key         []byte
 	useAES      bool
 	objptr      objptr
@@ -197,6 +198,9 @@ func (b *buffer) readToken() token {
 	}
 }
 
+// readHexString reads the body of a hex string after its '<'. An odd number of
+// digits is valid: the final digit behaves as if followed by 0 (PDF 32000-1,
+// 7.3.4.3).
 func (b *buffer) readHexString() token {
 	tmp := b.tmp[:0]
 	for {
@@ -221,6 +225,15 @@ func (b *buffer) readHexString() token {
 		}
 		if isSpace(c2) {
 			goto Loop2
+		}
+		if c2 == '>' {
+			x := unhex(c) << 4
+			if x < 0 {
+				b.errorf("malformed hex string %c", c)
+				break
+			}
+			tmp = append(tmp, byte(x))
+			break
 		}
 		x := unhex(c)<<4 | unhex(c2)
 		if x < 0 {
@@ -487,7 +500,25 @@ func (b *buffer) readObject() object {
 	return tok
 }
 
+// maxObjectNesting bounds arrays and dictionaries nested inside one another.
+// readObject recurses once per level, and a run of openers with no closers
+// would otherwise exhaust the goroutine stack, which is fatal rather than
+// recoverable.
+const maxObjectNesting = 512
+
+func (b *buffer) enter() {
+	if b.depth++; b.depth > maxObjectNesting {
+		b.errorf("malformed PDF: object nesting deeper than %d", maxObjectNesting)
+	}
+}
+
+func (b *buffer) leave() {
+	b.depth--
+}
+
 func (b *buffer) readArray() object {
+	b.enter()
+	defer b.leave()
 	var x array
 	for {
 		tok := b.readToken()
@@ -506,6 +537,8 @@ func (b *buffer) readArray() object {
 }
 
 func (b *buffer) readDict() object {
+	b.enter()
+	defer b.leave()
 	x := make(dict)
 	for {
 		tok := b.readToken()
