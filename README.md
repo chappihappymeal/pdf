@@ -30,6 +30,8 @@ Fixes are offered back to upstream as pull requests, and upstream's open bug-fix
 
 ## Install
 
+Requires Go 1.24 or later.
+
 ```sh
 go get github.com/chappihappymeal/pdf
 ```
