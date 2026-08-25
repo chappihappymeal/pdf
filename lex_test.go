@@ -91,3 +91,17 @@ func TestReadObjectStopsAtStrayCloseBracket(t *testing.T) {
 		t.Fatalf("expected key A in dict, got %v", d)
 	}
 }
+
+// TestLiteralStringUnknownEscape pins PDF 32000-1, 7.3.4.2: a backslash before
+// a character that is not an escape is ignored, so (a\qb) reads as "aqb"
+// rather than being reported as malformed.
+func TestLiteralStringUnknownEscape(t *testing.T) {
+	b := newBuffer(strings.NewReader(`(a\qb) (x\yz)`), 0)
+	b.allowEOF = true
+	for _, want := range []string{"aqb", "xyz"} {
+		got := b.readToken()
+		if got != want {
+			t.Errorf("readToken = %#v, want %q", got, want)
+		}
+	}
+}
