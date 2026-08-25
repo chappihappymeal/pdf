@@ -35,7 +35,7 @@ func (stk *Stack) Pop() Value {
 }
 
 func newDict() Value {
-	return Value{nil, objptr{}, make(dict)}
+	return Value{data: make(dict)}
 }
 
 // Interpret interprets the content in a stream as a basic PostScript program,
@@ -59,7 +59,7 @@ func Interpret(strm Value, do func(stk *Stack, op string)) {
 	var dicts []dict
 	var rd io.Reader
 	if strm.Kind() == Array {
-		readers := make([]io.Reader, 0, 2*strm.Len()-1)
+		readers := make([]io.Reader, 0, 2*strm.Len())
 		for i := 0; i < strm.Len(); i++ {
 			if i > 0 {
 				readers = append(readers, strings.NewReader("\n"))
@@ -89,7 +89,7 @@ Reading:
 			default:
 				for i := len(dicts) - 1; i >= 0; i-- {
 					if v, ok := dicts[i][name(kw)]; ok {
-						stk.Push(Value{nil, objptr{}, v})
+						stk.Push(Value{data: v})
 						continue Reading
 					}
 				}
@@ -97,13 +97,13 @@ Reading:
 				continue
 			case "dict":
 				stk.Pop()
-				stk.Push(Value{nil, objptr{}, make(dict)})
+				stk.Push(Value{data: make(dict)})
 				continue
 			case "currentdict":
 				if len(dicts) == 0 {
 					panic("no current dictionary")
 				}
-				stk.Push(Value{nil, objptr{}, dicts[len(dicts)-1]})
+				stk.Push(Value{data: dicts[len(dicts)-1]})
 				continue
 			case "begin":
 				d := stk.Pop()
@@ -138,7 +138,7 @@ Reading:
 		}
 		b.unreadToken(tok)
 		obj := b.readObject()
-		stk.Push(Value{nil, objptr{}, obj})
+		stk.Push(Value{data: obj})
 	}
 }
 
