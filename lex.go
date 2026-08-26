@@ -330,8 +330,11 @@ func unhex(b byte) int {
 func (b *buffer) readLiteralString() token {
 	tmp := b.tmp[:0]
 	depth := 1
-	for !b.eof {
+	for {
 		c := b.readByte()
+		if b.eof {
+			break
+		}
 		switch c {
 		case '(':
 			depth++
@@ -557,9 +560,13 @@ type objdef struct {
 // reading ahead up to two tokens and pushing them back if neither matches.
 // Strings are decrypted here when the document is encrypted, since the key
 // depends on the object being read. A closing ">>" or "]" met where a value
-// was expected ends the enclosing dictionary or array by reading as null.
+// was expected ends the enclosing dictionary or array by reading as null, and
+// so does the end of input.
 func (b *buffer) readObject() object {
 	tok := b.readToken()
+	if tok == io.EOF {
+		return nil
+	}
 	if kw, ok := tok.(keyword); ok {
 		switch kw {
 		case "null":
