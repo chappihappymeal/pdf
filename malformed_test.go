@@ -99,10 +99,8 @@ func TestMalformedXref(t *testing.T) {
 		// /Size preallocates the table directly.
 		{"size huge", xrefStreamPDF("/Size 4611686018427387904 /W [1 1 1]", entry)},
 		{"size negative", xrefStreamPDF("/Size -1 /W [1 1 1]", entry)},
-		{"size past file length", xrefStreamPDF("/Size 100000000 /W [1 1 1]", entry)},
 
 		// /Index names the object numbers a subsection describes.
-		{"index start huge", xrefStreamPDF("/Size 1 /W [1 1 1] /Index [4000000000 1]", entry)},
 		{"index start negative", xrefStreamPDF("/Size 4 /W [1 1 1] /Index [-1 1]", entry)},
 		{"index count negative", xrefStreamPDF("/Size 4 /W [1 1 1] /Index [0 -1]", entry)},
 		{"index odd length", xrefStreamPDF("/Size 4 /W [1 1 1] /Index [0]", entry)},
@@ -114,7 +112,6 @@ func TestMalformedXref(t *testing.T) {
 		{"w missing", xrefStreamPDF("/Size 4", entry)},
 
 		// Classic cross-reference tables take the same values as tokens.
-		{"table start huge", xrefTablePDF("4000000000 1\n0000000016 00000 n \n", "<< /Size 5 >>")},
 		{"table start negative", xrefTablePDF("-1 1\n0000000016 00000 n \n", "<< /Size 5 >>")},
 		{"table count negative", xrefTablePDF("0 -1\n0000000016 00000 n \n", "<< /Size 5 >>")},
 		{"trailer size negative", xrefTablePDF("0 1\n0000000000 65535 f \n", "<< /Size -1 >>")},
@@ -130,6 +127,30 @@ func TestMalformedXref(t *testing.T) {
 			}
 		})
 	}
+
+	// A large declared /Size and far-off object numbers are tolerated: the
+	// declaration no longer sizes any allocation, so a legal file with
+	// sparse or high numbering is never refused.
+	t.Run("large declarations are not rejected", func(t *testing.T) {
+		for _, hdr := range []string{
+			// Without /Index the declared /Size names the default entry
+			// count, so a one-entry stream pairs it with /Index [0 1].
+			"/Size 100000000 /W [1 1 1] /Index [0 1]",
+			"/Size 1 /W [1 1 1] /Index [4000000000 1]",
+		} {
+			mustNotCrash(t, func() {
+				if err := openBytes(xrefStreamPDF(hdr, entry)); err != nil {
+					t.Errorf("%s: %v", hdr, err)
+				}
+			})
+		}
+		mustNotCrash(t, func() {
+			data := xrefTablePDF("4000000000 1\n0000000016 00000 n \n", "<< /Size 5 >>")
+			if err := openBytes(data); err != nil {
+				t.Errorf("classic table with a huge start: %v", err)
+			}
+		})
+	})
 
 	// An /Index that reaches past the preallocated table is tolerated, the
 	// same way readXrefTableData tolerates a classic subsection past the end:
@@ -194,7 +215,7 @@ func TestLargeXrefTableGrows(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewReader: %v", err)
 	}
-	if got := len(r.xref); got != n {
+	if got := r.xref.size(); got != n {
 		t.Errorf("xref table has %d entries, want %d", got, n)
 	}
 }
@@ -229,7 +250,7 @@ func TestCompressedXrefStreamManyObjects(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewReader on a %d-byte file describing %d objects: %v", len(data), n, err)
 	}
-	if got := len(r.xref); got != n {
+	if got := r.xref.size(); got != n {
 		t.Errorf("xref table has %d entries, want %d", got, n)
 	}
 }

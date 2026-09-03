@@ -4,7 +4,7 @@
 
 // Package pdf implements reading of PDF files.
 //
-// Overview
+// # Overview
 //
 // PDF is Adobe's Portable Document Format, ubiquitous on the internet.
 // A PDF document is a complex data format built on a fairly simple structure.
@@ -43,7 +43,6 @@
 // they are implemented only in terms of the Value API and could be moved outside
 // the package. Equally important, traversal of other PDF data structures can be implemented
 // in other packages as needed.
-//
 package pdf
 
 // BUG(rsc): The package is incomplete, although it has been used successfully on some
@@ -83,7 +82,7 @@ var DebugOn = false
 type Reader struct {
 	f          io.ReaderAt
 	end        int64
-	xref       []xref
+	xref       *xrefTable
 	trailer    dict
 	trailerptr objptr
 	key        []byte
@@ -108,12 +107,13 @@ const (
 	// what let a 200-byte file ask for tens of gigabytes.
 	maxXrefPrealloc = 1 << 16
 
-	// maxObjectNumber bounds an object number, and with it the highest index a
-	// cross-reference table can reach. Object streams are compressed, so the
-	// file length is not a usable bound here: a small file can legitimately
-	// describe far more objects than it has bytes. This is instead a limit on
-	// object numbers themselves, well above any real document.
-	maxObjectNumber = 1 << 23
+	// maxObjectNumber bounds an object number. It is the representational
+	// limit — objptr.id is a uint32 — not a policy: since the table grows
+	// only with the entries a file really contains (see xrefTable), a legal
+	// file with sparse or high numbering is never refused, and the number a
+	// file declares no longer sizes any allocation. (PDF 32000-1 Annex C
+	// suggests 8388607 as an implementation limit; 32000-2 dropped it.)
+	maxObjectNumber = 1<<32 - 1
 
 	// maxXrefFieldWidth bounds an entry in an xref stream /W array. The
 	// widths are byte counts that decodeInt accumulates into an int, so a
@@ -133,13 +133,77 @@ const (
 	maxPredictorColumns = 1 << 20
 )
 
-// preallocXref returns a cross-reference table sized for the declared number of
-// entries, without letting the declaration alone decide the allocation.
-func preallocXref(size int64) []xref {
+// An xrefTable maps object numbers to cross-reference entries. Numbers near
+// the ones already stored live in a dense slice. A file can also name a number
+// far past anything it has described, since object numbers are its own choice
+// up to maxObjectNumber, and a slice sized by such a number would let two
+// tokens of input commit gigabytes. Those entries go in a map instead, so
+// memory tracks the entries actually read.
+type xrefTable struct {
+	dense  []xref
+	sparse map[uint32]xref
+	n      int // entries stored
+}
+
+// newXrefTable returns a table sized for the declared number of entries,
+// without letting the declaration alone decide the allocation.
+func newXrefTable(size int64) *xrefTable {
 	if size > maxXrefPrealloc {
 		size = maxXrefPrealloc
 	}
-	return make([]xref, size)
+	return &xrefTable{dense: make([]xref, size)}
+}
+
+// get returns the entry for object number id, or the zero entry if none was
+// stored. An entry stored sparse while its number was out of reach of the
+// slice stays there after the slice grows across it, so an unset slot defers
+// to the map.
+func (t *xrefTable) get(id uint32) xref {
+	if t == nil {
+		return xref{}
+	}
+	if int64(id) < int64(len(t.dense)) {
+		if e := t.dense[id]; e.ptr != (objptr{}) || t.sparse == nil {
+			return e
+		}
+	}
+	return t.sparse[id]
+}
+
+// put stores the entry for object number id. The dense slice grows only in
+// proportion to what the table already holds, so the bytes read from the file
+// bound the allocation; anything further out is kept sparse.
+func (t *xrefTable) put(id int, e xref) {
+	if id >= len(t.dense) && id < 2*t.n+maxXrefPrealloc {
+		t.dense = append(t.dense, make([]xref, id+1-len(t.dense))...)
+	}
+	if id < len(t.dense) {
+		t.dense[id] = e
+		delete(t.sparse, uint32(id))
+	} else {
+		if t.sparse == nil {
+			t.sparse = make(map[uint32]xref)
+		}
+		t.sparse[uint32(id)] = e
+	}
+	t.n++
+}
+
+// truncate drops the entries for object numbers at or past size.
+func (t *xrefTable) truncate(size int64) {
+	if size < int64(len(t.dense)) {
+		t.dense = t.dense[:size]
+	}
+	for id := range t.sparse {
+		if int64(id) >= size {
+			delete(t.sparse, id)
+		}
+	}
+}
+
+// size returns the number of object numbers the table spans.
+func (t *xrefTable) size() int {
+	return len(t.dense) + len(t.sparse)
 }
 
 // checkObjectNumber reports whether x may be used as a cross-reference table
@@ -288,7 +352,7 @@ func (r *Reader) Trailer() Value {
 	return Value{r, r.trailerptr, r.trailer}
 }
 
-func readXref(r *Reader, b *buffer) ([]xref, objptr, dict, error) {
+func readXref(r *Reader, b *buffer) (*xrefTable, objptr, dict, error) {
 	tok := b.readToken()
 	if tok == keyword("xref") {
 		return readXrefTable(r, b)
@@ -300,7 +364,7 @@ func readXref(r *Reader, b *buffer) ([]xref, objptr, dict, error) {
 	return nil, objptr{}, nil, fmt.Errorf("malformed PDF: cross-reference table not found: %v", tok)
 }
 
-func readXrefStream(r *Reader, b *buffer) ([]xref, objptr, dict, error) {
+func readXrefStream(r *Reader, b *buffer) (*xrefTable, objptr, dict, error) {
 	obj1 := b.readObject()
 	obj, ok := obj1.(objdef)
 	if !ok {
@@ -324,7 +388,7 @@ func readXrefStream(r *Reader, b *buffer) ([]xref, objptr, dict, error) {
 	if err := checkObjectNumber(size); err != nil {
 		return nil, objptr{}, nil, fmt.Errorf("malformed PDF: xref stream Size: %v", err)
 	}
-	table := preallocXref(size)
+	table := newXrefTable(size)
 
 	table, err := readXrefStreamData(r, strm, table, size)
 	if err != nil {
@@ -373,7 +437,7 @@ func readXrefStream(r *Reader, b *buffer) ([]xref, objptr, dict, error) {
 	return table, strmptr, strm.hdr, nil
 }
 
-func readXrefStreamData(r *Reader, strm stream, table []xref, size int64) ([]xref, error) {
+func readXrefStreamData(r *Reader, strm stream, table *xrefTable, size int64) (*xrefTable, error) {
 	index, _ := strm.hdr["Index"].(array)
 	if index == nil {
 		index = array{int64(0), size}
@@ -408,6 +472,11 @@ func readXrefStreamData(r *Reader, strm stream, table []xref, size int64) ([]xre
 	wtotal := 0
 	for _, wid := range w {
 		wtotal += wid
+	}
+	// With no bytes per entry the loop below would consume no input, so the
+	// declared /Size alone would set how many entries get stored.
+	if wtotal == 0 {
+		return nil, fmt.Errorf("invalid W array %v: no bytes per entry", objfmt(ww))
 	}
 	buf := make([]byte, wtotal)
 	data := v.Reader()
@@ -445,24 +514,16 @@ func readXrefStreamData(r *Reader, strm stream, table []xref, size int64) ([]xre
 			v2 := decodeInt(buf[w[0] : w[0]+w[1]])
 			v3 := decodeInt(buf[w[0]+w[1] : w[0]+w[1]+w[2]])
 			x := int(start) + i
-			for cap(table) <= x {
-				table = append(table[:cap(table)], xref{})
-			}
-			// Growing capacity does not necessarily grow length past x, so
-			// reslice before indexing, as readXrefTableData does.
-			if len(table) <= x {
-				table = table[:x+1]
-			}
-			if table[x].ptr != (objptr{}) {
+			if table.get(uint32(x)).ptr != (objptr{}) {
 				continue
 			}
 			switch v1 {
 			case 0:
-				table[x] = xref{ptr: objptr{0, 65535}}
+				table.put(x, xref{ptr: objptr{0, 65535}})
 			case 1:
-				table[x] = xref{ptr: objptr{uint32(x), uint16(v3)}, offset: int64(v2)}
+				table.put(x, xref{ptr: objptr{uint32(x), uint16(v3)}, offset: int64(v2)})
 			case 2:
-				table[x] = xref{ptr: objptr{uint32(x), 0}, inStream: true, stream: objptr{uint32(v2), 0}, offset: int64(v3)}
+				table.put(x, xref{ptr: objptr{uint32(x), 0}, inStream: true, stream: objptr{uint32(v2), 0}, offset: int64(v3)})
 			default:
 				if DebugOn {
 					fmt.Printf("invalid xref stream type %d: %x\n", v1, buf)
@@ -481,10 +542,8 @@ func decodeInt(b []byte) int {
 	return x
 }
 
-func readXrefTable(r *Reader, b *buffer) ([]xref, objptr, dict, error) {
-	var table []xref
-
-	table, err := readXrefTableData(b, table)
+func readXrefTable(r *Reader, b *buffer) (*xrefTable, objptr, dict, error) {
+	table, err := readXrefTableData(b, newXrefTable(0))
 	if err != nil {
 		return nil, objptr{}, nil, fmt.Errorf("malformed PDF: %v", err)
 	}
@@ -529,14 +588,12 @@ func readXrefTable(r *Reader, b *buffer) ([]xref, objptr, dict, error) {
 		return nil, objptr{}, nil, fmt.Errorf("malformed PDF: negative trailer /Size %d", size)
 	}
 
-	if size < int64(len(table)) {
-		table = table[:size]
-	}
+	table.truncate(size)
 
 	return table, objptr{}, trailer, nil
 }
 
-func readXrefTableData(b *buffer, table []xref) ([]xref, error) {
+func readXrefTableData(b *buffer, table *xrefTable) (*xrefTable, error) {
 	for {
 		tok := b.readToken()
 		if tok == keyword("trailer") {
@@ -567,14 +624,8 @@ func readXrefTableData(b *buffer, table []xref) ([]xref, error) {
 				return nil, fmt.Errorf("malformed xref table")
 			}
 			x := int(start) + i
-			for cap(table) <= x {
-				table = append(table[:cap(table)], xref{})
-			}
-			if len(table) <= x {
-				table = table[:x+1]
-			}
-			if alloc == "n" && table[x].offset == 0 {
-				table[x] = xref{ptr: objptr{uint32(x), uint16(gen)}, offset: int64(off)}
+			if alloc == "n" && table.get(uint32(x)).offset == 0 {
+				table.put(x, xref{ptr: objptr{uint32(x), uint16(gen)}, offset: int64(off)})
 			}
 		}
 	}
@@ -758,7 +809,7 @@ func (v Value) RawString() string {
 	return x
 }
 
-// Text returns v's string value interpreted as a ``text string'' (defined in the PDF spec)
+// Text returns v's string value interpreted as a “text string” (defined in the PDF spec)
 // and converted to UTF-8.
 // If v.Kind() != String, Text returns the empty string.
 func (v Value) Text() string {
@@ -872,10 +923,7 @@ func (r *Reader) resolve(parent objptr, x interface{}) Value {
 // stays immutable once opened and remains safe to read from concurrently.
 func (r *Reader) resolveAt(parent objptr, x interface{}, depth int) Value {
 	if ptr, ok := x.(objptr); ok {
-		if ptr.id >= uint32(len(r.xref)) {
-			return Value{}
-		}
-		xref := r.xref[ptr.id]
+		xref := r.xref.get(ptr.id)
 		if xref.ptr != ptr || !xref.inStream && xref.offset == 0 {
 			return Value{}
 		}
@@ -986,7 +1034,7 @@ func (e *errorReadCloser) Close() error {
 
 // Reader returns the data contained in the stream v.
 // If v.Kind() != Stream, Reader returns a ReadCloser that
-// responds to all reads with a ``stream not present'' error.
+// responds to all reads with a “stream not present” error.
 func (v Value) Reader() io.ReadCloser {
 	x, ok := v.data.(stream)
 	if !ok {
